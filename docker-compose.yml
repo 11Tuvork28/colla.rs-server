@@ -1,0 +1,10 @@
+version: "3"
+
+services:
+  collar:
+    build: .
+    volumes:
+      - .:/collar
+    ports:
+      - "4000:4000"
+    command: colla-rs
