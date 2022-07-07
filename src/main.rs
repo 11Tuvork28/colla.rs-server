@@ -101,16 +101,16 @@ async fn handle_controller_socket(mut socket: WebSocket, state: Arc<State>) {
         match state.rx_collar.resubscribe().recv().await{
             Ok(command) => match socket.send( Message::Text(command)).await{
                 Ok(_) => {
-                    state.tx_collar.send("Send to her".to_string()).unwrap();
+                    state.tx_collar.send("Send to her\t".to_string()).unwrap();
                     continue
                 },
                 Err(_) => {
-                    state.tx_collar.send("Nu sheee offline ask her to restart. She loves you <3".to_string()).unwrap();
+                    state.tx_collar.send("Nu sheee offline ask her to restart. She loves you <3\t".to_string()).unwrap();
                     print!("byeee");
                     match socket.close().await{
                         Ok(_) => return,
                         Err(_) => {
-                            state.tx_collar.send("Nu the pipe broke tell her to restart or u will be angry. She loves you <3".to_string()).unwrap();
+                            state.tx_collar.send("Nu the pipe broke tell her to restart or u will be angry. She loves you <3\t".to_string()).unwrap();
                             return
                         },
                     };
@@ -144,7 +144,11 @@ async fn handle_socket(mut socket: WebSocket, state:  Arc<State>){
                         }
                         // TODO: Send these params to the controller socket before client response
                         // Reply to the socket with the command status
-                        state.tx_requester.send(serde_json::to_string(&cmd).unwrap()).unwrap();
+                        state.tx_requester.send(json!({
+                            "mode": cmd.mode.as_num(),
+                            "level": cmd.level,
+                            "duration": cmd.duration
+                        }).to_string()).unwrap();
                         let msg = state.rx_requester.resubscribe().recv().await.unwrap();
                         if socket
                             .send(Message::Text(msg+ &req_reply))
