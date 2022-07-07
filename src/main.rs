@@ -10,7 +10,7 @@ use axum::{
 use commands::Command;
 use serde_json::{self, json};
 use tokio::sync::broadcast::{Receiver, Sender, channel};
-use std::{net::SocketAddr, sync::Arc, collections::HashMap, fmt::Debug};
+use std::{net::SocketAddr, sync::{Arc, atomic::AtomicBool}, collections::HashMap, fmt::Debug};
 use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
@@ -18,7 +18,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod commands;
 struct State{
     rx_collar: Receiver<Command>,
-    tx_requester: Sender<Command>
+    tx_requester: Sender<Command>,
+    is_collar_connected: AtomicBool,
 }
 #[tokio::main]
 async fn main() {
@@ -32,7 +33,8 @@ async fn main() {
     let (tx, mut rx1) =  channel::<Command>(1);
     let state= State{
         rx_collar: rx1,
-        tx_requester: tx
+        tx_requester: tx,
+        is_collar_connected: AtomicBool::new(false),
     };
     // setup the webserver
     let app = Router::new()
@@ -46,7 +48,7 @@ async fn main() {
         );
 
     // run it with hyper
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 4000));
     tracing::debug!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
