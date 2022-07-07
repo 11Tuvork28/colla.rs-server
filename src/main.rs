@@ -1,7 +1,6 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        TypedHeader, Query,
+        ws::{Message, WebSocket, WebSocketUpgrade}, Query,
     },
     response::IntoResponse,
     routing::get,
@@ -10,16 +9,17 @@ use axum::{
 use commands::Command;
 use serde_json::{self, json};
 use tokio::sync::broadcast::{Receiver, Sender, channel};
-use std::{net::SocketAddr, sync::{Arc, atomic::AtomicBool}, collections::HashMap, fmt::Debug};
+use std::{net::SocketAddr, sync::Arc, collections::HashMap};
 use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod commands;
 struct State{
-    rx_collar: Receiver<Command>,
-    tx_requester: Sender<Command>,
-    is_collar_connected: AtomicBool,
+    rx_collar: Receiver<String>,
+    tx_collar: Sender<String>,
+    tx_requester: Sender<String>,
+    rx_requester: Receiver<String>,
 }
 #[tokio::main]
 async fn main() {
@@ -30,11 +30,14 @@ async fn main() {
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let (tx, mut rx1) =  channel::<Command>(1);
+    let (tx, mut rx1) =  channel::<String>(4);
+    let tx_collar =  tx.clone();
+    let rx_requester = tx.subscribe();
     let state= State{
         rx_collar: rx1,
+        tx_collar,
         tx_requester: tx,
-        is_collar_connected: AtomicBool::new(false),
+        rx_requester,
     };
     // setup the webserver
     let app = Router::new()
@@ -96,17 +99,21 @@ async fn handle_controller_socket(mut socket: WebSocket, state: Arc<State>) {
     // use this socket to forward valid commands (from the regular socket handler) to the controller board
     loop {
         match state.rx_collar.resubscribe().recv().await{
-            Ok(command) => match socket.send( Message::Text(json!({
-                "mode": command.mode.as_num(),
-                "level": command.level.to_string(),
-                "duration": command.duration.to_string()
-
-            }).to_string())).await{
-                Ok(_) => continue,
+            Ok(command) => match socket.send( Message::Text(command)).await{
+                Ok(_) => {
+                    state.tx_collar.send("Send to her".to_string()).unwrap();
+                    continue
+                },
                 Err(_) => {
+                    state.tx_collar.send("Nu sheee offline ask her to restart. She loves you <3".to_string()).unwrap();
                     print!("byeee");
-                    socket.close().await.unwrap();
-                    return;
+                    match socket.close().await{
+                        Ok(_) => return,
+                        Err(_) => {
+                            state.tx_collar.send("Nu the pipe broke tell her to restart or u will be angry. She loves you <3".to_string()).unwrap();
+                            return
+                        },
+                    };
                 },
             },
             Err(_) => continue,
@@ -137,9 +144,10 @@ async fn handle_socket(mut socket: WebSocket, state:  Arc<State>){
                         }
                         // TODO: Send these params to the controller socket before client response
                         // Reply to the socket with the command status
-                        state.tx_requester.send(cmd).unwrap();
+                        state.tx_requester.send(serde_json::to_string(&cmd).unwrap()).unwrap();
+                        let msg = state.rx_requester.resubscribe().recv().await.unwrap();
                         if socket
-                            .send(Message::Text(req_reply))
+                            .send(Message::Text(msg+ &req_reply))
                             .await
                             .is_err()
                         {
