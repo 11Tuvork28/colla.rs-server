@@ -76,12 +76,18 @@ async fn ws_collar(
     Query(params): Query<HashMap<String, String>>,
     Extension(state): Extension<Arc<State>>,
 ) -> impl IntoResponse {
-
-    ws.on_upgrade(move |socket| {
+    if params.contains_key("key"){
+        if params.get("key").unwrap().as_str() == "1fa8d152446a06ae3a88bfde5e20ce145100c204"{
+            ws.on_upgrade(move |socket| {
                 handle_controller_socket(socket, state.clone())
             })
 
-
+        }else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }else {
+        StatusCode::BAD_REQUEST.into_response()
+    }
 }
 
 async fn handle_controller_socket(mut socket: WebSocket, state: Arc<State>) {
