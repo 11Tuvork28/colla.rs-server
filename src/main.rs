@@ -142,8 +142,8 @@ async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
         .tx_collar
         .send(InternalMessage::new(
             500,
-            "Pet went offline... waiting for reconnect".to_string(),
-            Some("Request reconnect".to_string()),
+            messages::MessageTyp::PetOffline,
+            messages::ActionType::Reconnect,
         ))
         .unwrap();
 }
@@ -158,11 +158,15 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                     tracing::debug!("Send command to pet:\n {:?}", command);
                     state
                         .tx_collar
-                        .send(InternalMessage::new(200, "Send to her\t".to_string(), None))
+                        .send(InternalMessage::new(
+                            200,
+                            messages::MessageTyp::ACK,
+                            messages::ActionType::None,
+                        ))
                         .unwrap();
                     match state.rx_collar_write.resubscribe().recv().await {
-                        Ok(msg) => match msg.message.as_str() {
-                            "ack" => continue,
+                        Ok(msg) => match msg.get_type() {
+                            messages::MessageTyp::ACK => continue,
                             _ => return,
                         },
                         Err(_) => return,
@@ -177,8 +181,8 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                         .tx_collar
                         .send(InternalMessage::new(
                             500,
-                            "Pet went offline".to_string(),
-                            Some("Request reconnect".to_string()),
+                            messages::MessageTyp::PetOffline,
+                            messages::ActionType::Reconnect,
                         ))
                         .unwrap();
                     match sender.close().await {
@@ -191,8 +195,8 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                                 .tx_collar
                                 .send(InternalMessage::new(
                                     500,
-                                    "Pet went offline, unrecoverable error".to_string(),
-                                    Some("Request reconnect".to_string()),
+                                    messages::MessageTyp::PetUnrecoverableError,
+                                    messages::ActionType::RebootReconnect,
                                 ))
                                 .unwrap();
                             return;
@@ -210,7 +214,14 @@ async fn collar_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::Sta
             Some(val) => match val {
                 Ok(msg) => match msg {
                     Message::Text(text) => match text.as_str() {
-                        "ack" => state.tx_collar_read.send(InternalMessage::new(200,"Ack".to_string(),None)).unwrap(),
+                        "ack" => state
+                            .tx_collar_read
+                            .send(InternalMessage::new(
+                                200,
+                                messages::MessageTyp::ACK,
+                                messages::ActionType::None,
+                            ))
+                            .unwrap(),
                         _ => continue,
                     },
                     Message::Close(_) => return,
@@ -278,8 +289,8 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                                     .tx_collar
                                     .send(InternalMessage::new(
                                         400,
-                                        "Invalid params".to_string(),
-                                        None,
+                                        messages::MessageTyp::InvalidParams,
+                                        messages::ActionType::None,
                                     ))
                                     .unwrap();
                                 continue;
@@ -298,8 +309,8 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                                 .tx_collar
                                 .send(InternalMessage::new(
                                     400,
-                                    "Invalid command".to_string(),
-                                    None,
+                                    messages::MessageTyp::InvalidCommand,
+                                    messages::ActionType::None,
                                 ))
                                 .unwrap();
                         }
