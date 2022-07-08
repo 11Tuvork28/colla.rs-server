@@ -183,53 +183,79 @@ async fn collar_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::Sta
     }
 }
 
-async fn handle_controlling_socket(mut socket: WebSocket, state:  Arc<utils::State>){
-    loop {
-        if let Some(msg) = socket.recv().await {
-            if let Ok(msg) = msg {
-                match msg {
-                    Message::Text(t) => {
-                        tracing::trace!("client sent str: {:?}", &t);
-                        // TODO: improve the serde_json error handling: there's currently none at all, RIP socket.
-                        let cmd: commands::Command = match serde_json::from_str(&t){
-                            Ok(val) => val,
-                            Err(_) => {
-                                socket.send(Message::Text("invalid params".to_string())).await.unwrap();
-                                continue;
-                            },
-                        };
-                        tracing::debug!("Request received - mode: {}, str: {}, dur: {}", cmd.mode, cmd.level, cmd.duration);
-                        // Check command validity + prepare socket reply
-                        let mut req_reply: String = String::from("\n ack");
-                        if !commands::check_validity(cmd.clone()) {
-                            tracing::trace!("invalid command:\n {:?}", &cmd);
-                            req_reply = "\n invalid params".to_string();
-                        }
+async fn handle_controlling_socket(socket: WebSocket, state:  Arc<utils::State>){
+    let (sender, receiver) = socket.split();
+    let mut write_task = tokio::spawn(handle_controlling_write(sender, state.clone()));
+    let mut send_task = tokio::spawn(handle_controlling_read(receiver, state.clone()));
 
-                        tracing::trace!("sending command to pet websocket");
-                        state.tx_requester.send(json!({
-                            "mode": cmd.mode.as_num(),
-                            "level": cmd.level,
-                            "duration": cmd.duration
-                        }).to_string()).unwrap();
-                        tracing::trace!("Waiting for response from the pet websocket");
-                        let msg = state.rx_requester.resubscribe().recv().await.unwrap();
-                        if socket
-                            .send(Message::Text(msg+ &req_reply))
-                            .await
-                            .is_err()
-                        {
-                            tracing::debug!("client disconnected while trying to send response");
-                            return;
-                        }
+    // If any one of the tasks exit, abort the other.
+    tokio::select! {
+        _ = (&mut send_task) =>  {
+            tracing::trace!("Send task failed, aborting write task and exiting");
+            write_task.abort()
+        }
+        _ = (&mut write_task) =>{
+            tracing::trace!("Write task failed, aborting write task and exiting"); 
+            send_task.abort()
+        },
+    };
+    // Log what happened and inform the controlling websocket
+    tracing::debug!("Master disconnected.\n"); 
+}
+async fn handle_controlling_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<utils::State>){
+    loop {
+        match state.rx_requester.resubscribe().recv().await{
+            Ok(msg) => if sender.send(Message::Text(msg))
+                .await
+                .is_err()
+            {
+                tracing::debug!("Client disconnected while trying to send response");
+                return;
+            },
+            Err(_) => continue,
+        }
+    }
+}
+
+async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::State>){
+    loop{
+       match receiver.next().await {
+        Some(msg) =>  match msg {
+            Ok(msg) => match msg{
+                Message::Text(t) => {
+                    tracing::trace!("client sent str: {:?}", &t);
+                    // TODO: improve the serde_json error handling: there's currently none at all, RIP socket.
+                    let cmd: commands::Command = match serde_json::from_str(&t){
+                        Ok(val) => val,
+                        Err(_) => {
+                            state.tx_collar.send("invalid params".to_string()).unwrap();
+                            continue;
+                        },
+                    };
+                    tracing::debug!("Request received - mode: {}, str: {}, dur: {}", cmd.mode, cmd.level, cmd.duration);
+                    // Check command validity & and send response
+                    if !commands::check_validity(cmd.clone()) {
+                        tracing::trace!("invalid command:\n {:?}", &cmd);
+                        state.tx_collar.send("invalid command".to_string()).unwrap();
                     }
-                    Message::Close(_) => {
-                        tracing::debug!("client disconnected");
-                        return;
-                    }
-                    _ => tracing::trace!("Received unexpected message {:?}", msg)
+
+                    tracing::trace!("sending command to pet websocket");
+                    state.tx_requester.send(json!({
+                        "mode": cmd.mode.as_num(),
+                        "level": cmd.level,
+                        "duration": cmd.duration
+                    }).to_string()).unwrap();
+                    tracing::trace!("Waiting for response from the pet websocket");
                 }
-            } else {
+                Message::Close(_) => {
+                    tracing::debug!("client disconnected");
+                    return;
+                }
+                _ => tracing::trace!("Received unexpected message {:?}", msg),
+            },
+            Err(_) => return,
+        }
+        None => {
                 tracing::debug!("client disconnected");
                 return;
             }
