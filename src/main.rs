@@ -19,7 +19,6 @@ use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
-use serde_json::{self, json};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
