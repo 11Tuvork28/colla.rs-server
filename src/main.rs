@@ -1,5 +1,6 @@
 // Modules
 mod commands;
+mod messages;
 mod utils;
 
 use axum::{
@@ -13,6 +14,7 @@ use axum::{
     Extension, Router,
 };
 
+use crate::messages::Message as InternalMessage;
 use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
@@ -26,7 +28,6 @@ use std::{
 use tokio::sync::broadcast::channel;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 #[tokio::main]
 async fn main() {
     // Initialize the config
@@ -43,9 +44,9 @@ async fn main() {
 
     tracing::trace!("Opening channels");
     // We store 5 Messages just in case its not consumed instantly.
-    let (tx, rx1) = channel::<String>(5);
-    let (tx_collar, rx_requester) = channel::<String>(1); // One should be enough
-    let (tx_collar_read, rx_collar_write) = channel::<String>(1); // One should be enough
+    let (tx, rx1) = channel::<commands::Command>(5);
+    let (tx_collar, rx_requester) = channel::<InternalMessage>(1); // One should be enough
+    let (tx_collar_read, rx_collar_write) = channel::<InternalMessage>(1); // One should be enough
     tracing::trace!("creating state");
     let state = utils::State {
         rx_collar: rx1,
@@ -139,18 +140,28 @@ async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
     tracing::debug!("One task exited, aborted both and returning.\nPet reconnection required.");
     state
         .tx_collar
-        .send("Pet went offline... waiting for reconnect".to_string())
+        .send(InternalMessage::new(
+            500,
+            "Pet went offline... waiting for reconnect".to_string(),
+            Some("Request reconnect".to_string()),
+        ))
         .unwrap();
 }
 async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<utils::State>) {
     loop {
         match state.rx_collar.resubscribe().recv().await {
-            Ok(command) => match sender.send(Message::Text(command.clone())).await {
+            Ok(command) => match sender
+                .send(Message::Text(serde_json::to_string(&command).unwrap()))
+                .await
+            {
                 Ok(_) => {
-                    tracing::debug!("Send command to pet: {}", command);
-                    state.tx_collar.send("Send to her\t".to_string()).unwrap();
+                    tracing::debug!("Send command to pet:\n {:?}", command);
+                    state
+                        .tx_collar
+                        .send(InternalMessage::new(200, "Send to her\t".to_string(), None))
+                        .unwrap();
                     match state.rx_collar_write.resubscribe().recv().await {
-                        Ok(msg) => match msg.as_str() {
+                        Ok(msg) => match msg.message.as_str() {
                             "ack" => continue,
                             _ => return,
                         },
@@ -159,12 +170,16 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                 }
                 Err(_) => {
                     tracing::debug!(
-                        "Failed to send command to pet:\n {}\n Closing connection",
+                        "Failed to send command to pet:\n {:?}\n Closing connection",
                         command
                     );
                     state
                         .tx_collar
-                        .send("Nu sheee offline ask her to restart. She loves you <3\t".to_string())
+                        .send(InternalMessage::new(
+                            500,
+                            "Pet went offline".to_string(),
+                            Some("Request reconnect".to_string()),
+                        ))
                         .unwrap();
                     match sender.close().await {
                         Ok(_) => return,
@@ -172,7 +187,14 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                             tracing::debug!(
                                 "Failed to close connection, client reconnection required"
                             );
-                            state.tx_collar.send("Nu the pipe broke tell her to restart or u will be angry. She loves you <3\t".to_string()).unwrap();
+                            state
+                                .tx_collar
+                                .send(InternalMessage::new(
+                                    500,
+                                    "Pet went offline, unrecoverable error".to_string(),
+                                    Some("Request reconnect".to_string()),
+                                ))
+                                .unwrap();
                             return;
                         }
                     };
@@ -188,7 +210,7 @@ async fn collar_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::Sta
             Some(val) => match val {
                 Ok(msg) => match msg {
                     Message::Text(text) => match text.as_str() {
-                        "ack" => state.tx_collar_read.send("Ack".to_string()).unwrap(),
+                        "ack" => state.tx_collar_read.send(InternalMessage::new(200,"Ack".to_string(),None)).unwrap(),
                         _ => continue,
                     },
                     Message::Close(_) => return,
@@ -227,7 +249,11 @@ async fn handle_controlling_write(
     loop {
         match state.rx_requester.resubscribe().recv().await {
             Ok(msg) => {
-                if sender.send(Message::Text(msg)).await.is_err() {
+                if sender
+                    .send(Message::Text(serde_json::to_string(&msg).unwrap()))
+                    .await
+                    .is_err()
+                {
                     tracing::debug!("Client disconnected while trying to send response");
                     return;
                 }
@@ -248,7 +274,14 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                         let cmd: commands::Command = match serde_json::from_str(&t) {
                             Ok(val) => val,
                             Err(_) => {
-                                state.tx_collar.send("invalid params".to_string()).unwrap();
+                                state
+                                    .tx_collar
+                                    .send(InternalMessage::new(
+                                        400,
+                                        "Invalid params".to_string(),
+                                        None,
+                                    ))
+                                    .unwrap();
                                 continue;
                             }
                         };
@@ -261,21 +294,18 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                         // Check command validity & and send response
                         if !commands::check_validity(cmd.clone()) {
                             tracing::trace!("invalid command:\n {:?}", &cmd);
-                            state.tx_collar.send("invalid command".to_string()).unwrap();
+                            state
+                                .tx_collar
+                                .send(InternalMessage::new(
+                                    400,
+                                    "Invalid command".to_string(),
+                                    None,
+                                ))
+                                .unwrap();
                         }
 
                         tracing::trace!("sending command to pet websocket");
-                        state
-                            .tx_requester
-                            .send(
-                                json!({
-                                    "mode": cmd.mode.as_num(),
-                                    "level": cmd.level,
-                                    "duration": cmd.duration
-                                })
-                                .to_string(),
-                            )
-                            .unwrap();
+                        state.tx_requester.send(cmd).unwrap();
                         tracing::trace!("Waiting for response from the pet websocket");
                     }
                     Message::Close(_) => {
