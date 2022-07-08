@@ -51,6 +51,7 @@ pub enum MessageTyp {
     PetOffline,
     PetUnrecoverableError,
     PetOnline,
+    KeepAlive
 }
 
 impl MessageTyp {
@@ -62,6 +63,7 @@ impl MessageTyp {
             MessageTyp::PetOffline => "Pet went offline".to_string(),
             MessageTyp::PetUnrecoverableError => "Pet went offline with an unrecoverable error".to_string(),
             MessageTyp::PetOnline => "Pet is online".to_string(),
+            MessageTyp::KeepAlive => "Awaiting ACK to confirm Keep alive response".to_string(),
         }
     }
     fn from_string(s: &String) -> MessageTyp{

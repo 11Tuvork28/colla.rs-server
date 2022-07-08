@@ -24,11 +24,12 @@ use futures::{
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::Arc
 };
-use tokio::sync::broadcast::channel;
+use tokio::{sync::broadcast::channel, time::interval};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tokio::time::Duration;
 #[tokio::main]
 async fn main() {
     // Initialize the config
@@ -132,16 +133,34 @@ async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
     let (sender, receiver) = socket.split();
     let mut write_task = tokio::spawn(collar_write(sender, state.clone()));
     let mut send_task = tokio::spawn(collar_read(receiver, state.clone()));
-
+    let keep_alive_task =  {
+        let state = state.clone();
+        tokio::spawn( async move {
+            let mut interval = interval(Duration::from_secs(120));
+            loop {
+                interval.tick().await;
+                tracing::event!(target: "collar_rs_server",Level::DEBUG,"Sending keep alive");
+                state.tx_collar.send(InternalMessage::new(200, messages::MessageTyp::KeepAlive, messages::ActionType::None)).unwrap();
+                state.tx_requester.send(commands::Command{
+                    mode: commands::Modes::Led,
+                    level: 50,
+                    duration: 500,
+                }).unwrap();
+                
+            }
+        })
+    };
     // If any one of the tasks exit, abort the other.
     tokio::select! {
         _ = (&mut send_task) =>  {
-            tracing::trace!("Send task failed, aborting write task and exiting");
-            write_task.abort()
+            tracing::event!(target: "collar_rs_server",Level::TRACE,"Send task failed, aborting write task and exiting");
+            write_task.abort();
+            keep_alive_task.abort()
         }
         _ = (&mut write_task) =>{
-            tracing::trace!("Write task failed, aborting write task and exiting");
-            send_task.abort()
+             tracing::event!(target: "collar_rs_server",Level::TRACE,"Write task failed, aborting write task and exiting");
+            send_task.abort();
+            keep_alive_task.abort()
         },
     };
     // Log what happened and inform the controlling websocket
