@@ -4,7 +4,6 @@ use crate::commands::Command;
 use tokio::sync::broadcast::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 pub struct State{
-    pub rx_collar: Receiver<Command>,
     pub tx_collar: Sender<Message>,
     pub tx_requester: Sender<Command>,
     pub rx_requester: Receiver<Message>,
