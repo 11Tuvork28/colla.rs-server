@@ -38,7 +38,7 @@ impl Message {
         Message { status_code, message: message.to_string(), pet_action_required: pet_action_required.to_string() }
     }
     pub fn get_type(&self) -> MessageTyp{
-        MessageTyp::from_string(self.message)
+        MessageTyp::from_string(&self.message)
     }
 }
 
@@ -62,7 +62,7 @@ impl MessageTyp {
             MessageTyp::PetUnrecoverableError => "Pet went offline with an unrecoverable error".to_string(),
         }
     }
-    fn from_string(s: String) -> MessageTyp{
+    fn from_string(s: &String) -> MessageTyp{
         match s.as_str() {
         "ack" => MessageTyp::ACK,
         "Invalid params" => MessageTyp::InvalidParams,
