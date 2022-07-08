@@ -7,4 +7,4 @@ services:
       - .:/collar
     ports:
       - "4000:4000"
-    command: colla-rs
+    command: colla-rs-server
