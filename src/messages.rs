@@ -50,6 +50,7 @@ pub enum MessageTyp {
     InvalidCommand,
     PetOffline,
     PetUnrecoverableError,
+    PetOnline,
 }
 
 impl MessageTyp {
@@ -60,6 +61,7 @@ impl MessageTyp {
             MessageTyp::InvalidCommand => "Invalid command".to_string(),
             MessageTyp::PetOffline => "Pet went offline".to_string(),
             MessageTyp::PetUnrecoverableError => "Pet went offline with an unrecoverable error".to_string(),
+            MessageTyp::PetOnline => "Pet is online".to_string(),
         }
     }
     fn from_string(s: &String) -> MessageTyp{
