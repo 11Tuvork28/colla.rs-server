@@ -13,6 +13,8 @@ use axum::{
     routing::get,
     Extension, Router,
 };
+use serde_json::json;
+use tracing::Level;
 
 use crate::messages::Message as InternalMessage;
 use futures::{
@@ -26,29 +28,28 @@ use std::{
 };
 use tokio::sync::broadcast::channel;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 #[tokio::main]
 async fn main() {
     // Initialize the config
     let config = utils::Config::new();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| {
-                format!("colla-rs={0},tower_http={0}", config.log_level).into()
-            }),
-        ))
+        .with(EnvFilter::new(&format!(
+            "collar_rs_server={}",
+            config.log_level
+        )))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::trace!("Opening channels");
+    tracing::event!(target: "collar_rs_server",Level::TRACE,"Opening channels");
     // We store 5 Messages just in case its not consumed instantly.
     let (tx, rx1) = channel::<commands::Command>(5);
     let (tx_collar, rx_requester) = channel::<InternalMessage>(1); // One should be enough
     let (tx_collar_read, rx_collar_write) = channel::<InternalMessage>(1); // One should be enough
-    tracing::trace!("creating state");
+    tracing::event!(target: "collar_rs_server",Level::TRACE,"creating state");
+    drop(rx1);
     let state = utils::State {
-        rx_collar: rx1,
         tx_collar,
         tx_requester: tx,
         rx_requester,
@@ -58,7 +59,7 @@ async fn main() {
         tx_collar_read,
     };
 
-    tracing::trace!("creating router with layers");
+    tracing::event!(target: "collar_rs_server",Level::TRACE,"creating router with layers");
     // setup the webserver
     let app = Router::new()
         .route("/ws_requester", get(ws_requester))
@@ -72,7 +73,7 @@ async fn main() {
 
     // run it with hyper
     let addr = SocketAddr::new(IpAddr::V4(config.interface_ip), 4000);
-    tracing::debug!("Going live on {}", addr);
+    tracing::event!(target: "collar_rs_server",Level::DEBUG,"Going live on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -84,17 +85,17 @@ async fn ws_requester(
     Query(params): Query<HashMap<String, String>>,
     Extension(state): Extension<Arc<utils::State>>,
 ) -> impl IntoResponse {
-    tracing::trace!("Incoming request to open websocket as master");
+    tracing::event!(target: "collar_rs_server",Level::TRACE,"Incoming request to open websocket as master");
     if params.contains_key("key") {
         if params.get("key").unwrap().as_str() == state.key_him {
-            tracing::debug!("Master authenticated and is now online");
+            tracing::event!(target: "collar_rs_server",Level::DEBUG,"Master authenticated and is now online");
             ws.on_upgrade(move |socket| handle_controlling_socket(socket, state.clone()))
         } else {
-            tracing::info!("unauthorized master access denied");
+            tracing::event!(target: "collar_rs_server",Level::INFO,"unauthorized master access denied");
             StatusCode::UNAUTHORIZED.into_response()
         }
     } else {
-        tracing::info!("unauthorized master access denied");
+        tracing::event!(target: "collar_rs_server",Level::INFO,"unauthorized master access denied");
         StatusCode::BAD_REQUEST.into_response()
     }
 }
@@ -103,17 +104,25 @@ async fn ws_collar(
     Query(params): Query<HashMap<String, String>>,
     Extension(state): Extension<Arc<utils::State>>,
 ) -> impl IntoResponse {
-    tracing::trace!("Incoming request to open websocket as pet");
+    tracing::event!(target: "collar_rs_server",Level::TRACE,"Incoming request to open websocket as pet");
     if params.contains_key("key") {
         if params.get("key").unwrap().as_str() == state.key_collar {
-            tracing::debug!("Pet authenticated and is now online");
+            tracing::event!(target: "collar_rs_server",Level::DEBUG,"Pet authenticated and is now online");
+            state
+                .tx_collar
+                .send(InternalMessage::new(
+                    201,
+                    messages::MessageTyp::PetOnline,
+                    messages::ActionType::None,
+                ))
+                .unwrap();
             ws.on_upgrade(move |socket| handle_collar_socket(socket, state.clone()))
         } else {
-            tracing::info!("unauthorized pet access denied");
+            tracing::event!(target: "collar_rs_server",Level::INFO,"unauthorized pet access denied");
             StatusCode::UNAUTHORIZED.into_response()
         }
     } else {
-        tracing::info!("unauthorized pet access denied");
+        tracing::event!(target: "collar_rs_server",Level::INFO,"unauthorized pet access denied");
         StatusCode::BAD_REQUEST.into_response()
     }
 }
@@ -136,7 +145,7 @@ async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
         },
     };
     // Log what happened and inform the controlling websocket
-    tracing::debug!("One task exited, aborted both and returning.\nPet reconnection required.");
+    tracing::event!(target: "collar_rs_server",Level::DEBUG,"One task exited, aborted both and returning.\nPet reconnection required.");
     state
         .tx_collar
         .send(InternalMessage::new(
@@ -148,31 +157,49 @@ async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
 }
 async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<utils::State>) {
     loop {
-        match state.rx_collar.resubscribe().recv().await {
+        match state.tx_requester.subscribe().recv().await {
             Ok(command) => match sender
-                .send(Message::Text(serde_json::to_string(&command).unwrap()))
+                .send(Message::Text(
+                    json!({
+                        "mode": command.mode.as_num(),
+                        "duration": command.duration,
+                        "level": command.level,
+                    })
+                    .to_string(),
+                ))
                 .await
             {
                 Ok(_) => {
-                    tracing::debug!("Send command to pet:\n {:?}", command);
-                    state
-                        .tx_collar
-                        .send(InternalMessage::new(
-                            200,
-                            messages::MessageTyp::ACK,
-                            messages::ActionType::None,
-                        ))
-                        .unwrap();
+                    tracing::event!(target: "collar_rs_server",Level::DEBUG,"Send command to pet:\n {:?}", command);
                     match state.rx_collar_write.resubscribe().recv().await {
-                        Ok(msg) => match msg.get_type() {
-                            messages::MessageTyp::ACK => continue,
-                            _ => return,
-                        },
-                        Err(_) => return,
-                    }
+                        Ok(msg) => {
+                            match msg.get_type() {
+                                messages::MessageTyp::ACK => {
+                                    state
+                                        .tx_collar
+                                        .send(InternalMessage::new(
+                                            200,
+                                            messages::MessageTyp::ACK,
+                                            messages::ActionType::None,
+                                        ))
+                                        .unwrap();
+                                    continue;
+                                }
+                                _ => continue,
+                            };
+                        }
+                        Err(_) => state
+                            .tx_collar
+                            .send(InternalMessage::new(
+                                200,
+                                messages::MessageTyp::PetOnline,
+                                messages::ActionType::Reconnect,
+                            ))
+                            .unwrap(),
+                    };
                 }
                 Err(_) => {
-                    tracing::debug!(
+                    tracing::event!(target: "collar_rs_server",Level::DEBUG,
                         "Failed to send command to pet:\n {:?}\n Closing connection",
                         command
                     );
@@ -187,7 +214,7 @@ async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<util
                     match sender.close().await {
                         Ok(_) => return,
                         Err(_) => {
-                            tracing::debug!(
+                            tracing::event!(target: "collar_rs_server",Level::DEBUG,
                                 "Failed to close connection, client reconnection required"
                             );
                             state
@@ -228,7 +255,17 @@ async fn collar_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::Sta
                 },
                 Err(_) => return,
             },
-            None => continue,
+            None => {
+                state
+                            .tx_collar_read
+                            .send(InternalMessage::new(
+                                200,
+                                messages::MessageTyp::PetOffline,
+                                messages::ActionType::RebootReconnect,
+                            ))
+                            .unwrap();
+                            return;
+            },
         };
     }
 }
@@ -250,7 +287,7 @@ async fn handle_controlling_socket(socket: WebSocket, state: Arc<utils::State>) 
         },
     };
     // Log what happened and inform the controlling websocket
-    tracing::debug!("Master disconnected.\n");
+    tracing::event!(target: "collar_rs_server",Level::DEBUG,"Master disconnected.\n");
 }
 async fn handle_controlling_write(
     mut sender: SplitSink<WebSocket, Message>,
@@ -264,7 +301,7 @@ async fn handle_controlling_write(
                     .await
                     .is_err()
                 {
-                    tracing::debug!("Client disconnected while trying to send response");
+                    tracing::event!(target: "collar_rs_server",Level::DEBUG,"Client disconnected while trying to send response");
                     return;
                 }
             }
@@ -279,7 +316,7 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
             Some(msg) => match msg {
                 Ok(msg) => match msg {
                     Message::Text(t) => {
-                        tracing::trace!("client sent str: {:?}", &t);
+                        tracing::event!(target: "collar_rs_server",Level::TRACE,"client sent str: {:?}", &t);
                         // TODO: improve the serde_json error handling: there's currently none at all, RIP socket.
                         let cmd: commands::Command = match serde_json::from_str(&t) {
                             Ok(val) => val,
@@ -295,7 +332,7 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                                 continue;
                             }
                         };
-                        tracing::debug!(
+                        tracing::event!(target: "collar_rs_server",Level::DEBUG,
                             "Request received - mode: {}, str: {}, dur: {}",
                             cmd.mode,
                             cmd.level,
@@ -303,7 +340,7 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                         );
                         // Check command validity & and send response
                         if !commands::check_validity(cmd.clone()) {
-                            tracing::trace!("invalid command:\n {:?}", &cmd);
+                            tracing::event!(target: "collar_rs_server",Level::TRACE,"invalid command:\n {:?}", &cmd);
                             state
                                 .tx_collar
                                 .send(InternalMessage::new(
@@ -314,9 +351,13 @@ async fn handle_controlling_read(mut receiver: SplitStream<WebSocket>, state: Ar
                                 .unwrap();
                         }
 
-                        tracing::trace!("sending command to pet websocket");
-                        state.tx_requester.send(cmd).unwrap();
-                        tracing::trace!("Waiting for response from the pet websocket");
+                        tracing::event!(target: "collar_rs_server",Level::TRACE,"sending command to pet websocket");
+                        if state.tx_requester.receiver_count() > 0{
+                            state.tx_requester.send(cmd).unwrap();
+                            tracing::event!(target: "collar_rs_server",Level::TRACE,"Waiting for response from the pet websocket");
+                        }else {
+                            state.tx_collar.send(InternalMessage::new(400, messages::MessageTyp::PetOffline, messages::ActionType::Reconnect)).unwrap();
+                        }
                     }
                     Message::Close(_) => {
                         tracing::debug!("client disconnected");
