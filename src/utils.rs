@@ -1,16 +1,17 @@
 use std::{fs, net::Ipv4Addr};
-
+use crate::messages::Message;
+use crate::commands::Command;
 use tokio::sync::broadcast::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 pub struct State{
-    pub rx_collar: Receiver<String>,
-    pub tx_collar: Sender<String>,
-    pub tx_requester: Sender<String>,
-    pub rx_requester: Receiver<String>,
+    pub rx_collar: Receiver<Command>,
+    pub tx_collar: Sender<Message>,
+    pub tx_requester: Sender<Command>,
+    pub rx_requester: Receiver<Message>,
     pub key_collar: String,
     pub key_him: String,
-    pub rx_collar_write: Receiver<String>,
-    pub tx_collar_read: Sender<String>,
+    pub rx_collar_write: Receiver<Message>,
+    pub tx_collar_read: Sender<Message>,
 }
 
 
