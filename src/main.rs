@@ -14,7 +14,7 @@ use tokio::sync::broadcast::channel;
 use std::{net::{SocketAddr, IpAddr}, sync::Arc, collections::HashMap};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
+use futures::{sink::SinkExt, stream::{StreamExt, SplitSink, SplitStream}};
 
 #[tokio::main]
 async fn main() {
@@ -33,6 +33,7 @@ async fn main() {
     // We store 5 Messages just in case its not consumed instantly.
     let (tx, rx1) =  channel::<String>(5);
     let (tx_collar, rx_requester) =  channel::<String>(1); // One should be enough
+    let (tx_collar_read, rx_collar_write) =  channel::<String>(1); // One should be enough
     tracing::trace!("creating state");
     let state= utils::State{
         rx_collar: rx1,
@@ -41,6 +42,8 @@ async fn main() {
         rx_requester,
         key_collar: config.key_collar.clone(),
         key_him: config.key_him.clone(),
+        rx_collar_write,
+        tx_collar_read,
     };
     
     tracing::trace!("creating router with layers");
@@ -108,20 +111,46 @@ async fn ws_collar(
     }
 }
 
-async fn handle_collar_socket(mut socket: WebSocket, state: Arc<utils::State>) {
+async fn handle_collar_socket(socket: WebSocket, state: Arc<utils::State>) {
     // use this socket to forward valid commands (from the regular socket handler) to the controller board
+    let (sender, receiver) = socket.split();
+    let mut write_task = tokio::spawn(collar_write(sender, state.clone()));
+    let mut send_task = tokio::spawn(collar_read(receiver, state.clone()));
+
+    // If any one of the tasks exit, abort the other.
+    tokio::select! {
+        _ = (&mut send_task) =>  {
+            tracing::trace!("Send task failed, aborting write task and exiting");
+            write_task.abort()
+        }
+        _ = (&mut write_task) =>{
+            tracing::trace!("Write task failed, aborting write task and exiting"); 
+            send_task.abort()
+        },
+    };
+    // Log what happened and inform the controlling websocket
+    tracing::debug!("One task exited, aborted both and returning.\nPet reconnection required."); 
+    state.tx_collar.send("Pet went offline... waiting for reconnect".to_string()).unwrap();
+}
+async fn collar_write(mut sender: SplitSink<WebSocket, Message>, state: Arc<utils::State>){
     loop {
         match state.rx_collar.resubscribe().recv().await{
-            Ok(command) => match socket.send( Message::Text(command.clone())).await{
+            Ok(command) => match sender.send( Message::Text(command.clone())).await{
                 Ok(_) => {
                     tracing::debug!("Send command to pet: {}", command);
                     state.tx_collar.send("Send to her\t".to_string()).unwrap();
-                    continue
+                    match state.rx_collar_write.resubscribe().recv().await{
+                        Ok(msg) => match msg.as_str() {
+                            "ack" => continue,
+                            _ => return,
+                        },
+                        Err(_) => return,
+                    }
                 },
                 Err(_) => {
                     tracing::debug!("Failed to send command to pet:\n {}\n Closing connection", command);
                     state.tx_collar.send("Nu sheee offline ask her to restart. She loves you <3\t".to_string()).unwrap();
-                    match socket.close().await{
+                    match sender.close().await{
                         Ok(_) => return,
                         Err(_) => {
                             tracing::debug!("Failed to close connection, client reconnection required");
@@ -133,6 +162,24 @@ async fn handle_collar_socket(mut socket: WebSocket, state: Arc<utils::State>) {
             },
             Err(_) => continue,
         }
+    }
+}
+async fn collar_read(mut receiver: SplitStream<WebSocket>, state: Arc<utils::State>){
+    loop {
+        match receiver.next().await{
+            Some(val) => match val{
+                Ok(msg) => match msg{
+                    Message::Text(text) => match text.as_str(){
+                        "ack" => state.tx_collar_read.send("Ack".to_string()).unwrap(),
+                        _ => continue,
+                    },
+                    Message::Close(_) => return,
+                    _ => continue,
+                },
+                Err(_) => return
+            },
+            None => continue,
+        };
     }
 }
 
