@@ -30,9 +30,9 @@ async fn main() {
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let (tx, mut rx1) =  channel::<String>(4);
-    let tx_collar =  tx.clone();
-    let rx_requester = tx.subscribe();
+    // We store 5 Messages just in case its not consumed instantly.
+    let (tx, rx1) =  channel::<String>(5);
+    let (tx_collar, rx_requester) =  channel::<String>(1); // One should be enough
     let state= State{
         rx_collar: rx1,
         tx_collar,
