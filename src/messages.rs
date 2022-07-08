@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 /// ```json
 /// {
 ///     statusCode: 200,
-///     message: "Send to pet",
+///     message: MessageType::ACK,
 ///     pet_action_required: null
 /// }
 /// ``` 
@@ -14,14 +14,14 @@ use serde::{Serialize, Deserialize};
 /// Or
 /// {
 ///     statusCode: 400,
-///     message: "Invalid params",
+///     message: MessageTyp::InvalidParams,
 ///     pet_action_required: null
 /// }
 /// ``` 
 /// Or
 /// /// {
 ///     statusCode: 500,
-///     message: "Pet disconnected",
+///     message: MessageTyp::PetOffline,
 ///     pet_action_required: "Reconnect or reboot collar"
 /// }
 /// ``` 
