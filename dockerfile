@@ -5,4 +5,4 @@ COPY ./ .
 
 RUN cargo install --path .
 
-CMD ["./colla-rs"]
+CMD ["./colla-rs-sever"]
