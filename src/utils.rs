@@ -9,6 +9,8 @@ pub struct State{
     pub rx_requester: Receiver<String>,
     pub key_collar: String,
     pub key_him: String,
+    pub rx_collar_write: Receiver<String>,
+    pub tx_collar_read: Sender<String>,
 }
 
 
