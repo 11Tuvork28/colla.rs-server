@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 // TODO: properly name these modes, I don't know them all -JSKitty
 pub enum Modes {
@@ -15,8 +15,17 @@ impl std::fmt::Display for Modes {
         write!(f, "{:?}", self)
     }
 }
-
-#[derive(Serialize, Deserialize, Debug)]
+impl  Modes {
+    pub fn as_num(&self) -> i16{
+        match *self {
+            Modes::Zappy => 4,
+            Modes::Vibey => 3,
+            Modes::Beep => 2,
+            Modes::Led => 1,
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Command {
     pub mode: Modes,  // 1-4
     pub level: i8,    // 1-100

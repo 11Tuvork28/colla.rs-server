@@ -1,0 +1,5 @@
+key_collar: SomeLongSecureString
+key_him: AlsoSomeLongSecureString
+listen_on_port: 4000 # Can be any number between 0 and 65535
+interface_ip: 0.0.0.0  # Aka all interfaces the server has don't change unless you know what you're doing
+log_level: debug # Allowed parameters are debug, info, warn, error, fatal and trace
