@@ -74,7 +74,7 @@ async fn ws_requester(
         if params.get("key").unwrap().as_str() == state.key_him{
             tracing::debug!("Master authenticated and is now online");
             ws.on_upgrade(move |socket| {
-                handle_socket(socket, state.clone())
+                handle_controlling_socket(socket, state.clone())
             })
         }else {
             tracing::info!("unauthorized master access denied");
@@ -136,7 +136,7 @@ async fn handle_collar_socket(mut socket: WebSocket, state: Arc<utils::State>) {
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, state:  Arc<utils::State>){
+async fn handle_controlling_socket(mut socket: WebSocket, state:  Arc<utils::State>){
     loop {
         if let Some(msg) = socket.recv().await {
             if let Ok(msg) = msg {
