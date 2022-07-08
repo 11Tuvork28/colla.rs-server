@@ -32,3 +32,9 @@ pub struct Message{
     pub message: String,
     pub pet_action_required: Option<String>,
 }
+
+impl Message {
+    pub fn new(status_code: i16, message: String, pet_action_required: Option<String>) -> Message {
+        Message { status_code, message, pet_action_required }
+    }
+}
