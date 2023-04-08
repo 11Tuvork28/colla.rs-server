@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script type="module">
+      import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js";
+      var socket = io("/ws_controller");
+      socket.on("connect", function (data) {
+        socket.emit("publishUser", {
+          name: "Controller",
+          clients: [
+            {
+              name: "Client",
+            },
+          ],
+        });
+      });
+      socket.on("error", console.error.bind(console));
+      socket.on("message", (data) => {
+        console.log(data);
+        switch (data.action) {
+          case "publish":
+            socket.emit("publishToClients", {
+              name: "Controller",
+              clients: [
+                {
+                  name: "Client",
+                },
+              ],
+            });
+            break;
+          case "awaitAck":
+            break;
+          case "ready":
+            socket.emit("command", {
+              mode: "zappy",
+              level: 10,
+              duration: 10,
+              receiver: {
+                name: "Client",
+              },
+              issuer:  {
+              name: "Controller",
+              clients: [
+                {
+                  name: "Client",
+                },
+              ],
+            }
+            });
+            break;
+          case "none":
+            addMessage(data.message);
+            break;
+          default:
+            addMessage(data);
+            break;
+        }
+      });
+
+      function addMessage(message) {
+        var text = document.createTextNode(message),
+          el = document.createElement("li"),
+          messages = document.getElementById("messages");
+
+        el.appendChild(text);
+        messages.appendChild(el);
+      }
+    </script>
+  </head>
+  <body>
+    <ul id="messages"></ul>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "colla.rs-server",
+  "version": "1.0.0",
+  "description": "A multi user platform for a handful of devices",
+  "repository": "https://github.com/11Tuvork28/colla.rs-server.git",
+  "author": "11tuvork28 <zofi@xamh.de>",
+  "license": "MIT",
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node dist/index.js",
+    "dev": "concurrently \"npx tsc --watch\" \"nodemon -q dist/index.js\""
+  },
+  "dependencies": {
+    "@types/express": "^4.17.17",
+    "@types/node": "^18.15.11",
+    "express": "^4.18.2",
+    "redis": "^4.6.5",
+    "socket.io": "^4.6.1",
+    "typescript": "^5.0.4"
+  }
+}

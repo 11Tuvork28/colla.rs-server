@@ -16,3 +16,6 @@ Cargo.lock
 
 # envconfig
 *.yaml
+# Node modules
+node_modules
+dist
